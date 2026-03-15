@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+:root {
+  --color-background:     #111010;
+  --color-surface:        #1C1B19;
+  --color-glass:          rgba(255,255,255,0.05);
+  --color-accent:         #4A6090;
+  --color-accent-light:   #8BA3CC;
+  --color-text-primary:   #E8E4DC;
+  --color-text-secondary: rgba(232,228,220,0.4);
+  --color-border:         rgba(255,255,255,0.07);
+  --color-glass-border:   rgba(232,228,220,0.12);
+}
+
+@theme inline {
+  --color-background: var(--color-background);
+  --color-surface: var(--color-surface);
+  --color-glass: var(--color-glass);
+  --color-accent: var(--color-accent);
+  --color-accent-light: var(--color-accent-light);
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-border: var(--color-border);
+  --color-glass-border: var(--color-glass-border);
+  --font-sans: var(--font-inter);
+  --font-arabic: var(--font-amiri);
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  min-height: 100dvh;
+}
+
+/* Glassmorphism utility */
+.glass-card {
+  background: var(--color-glass);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--color-glass-border);
+  border-radius: 1rem;
+}
+
+.glass-card-highlight {
+  background: var(--color-glass);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--color-accent);
+  border-radius: 1rem;
+}
+
+/* Decorative background gradient */
+body::before {
+  content: '';
+  position: fixed;
+  top: -30%;
+  right: -20%;
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(74,96,144,0.08) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Smooth scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-glass-border);
+  border-radius: 2px;
+}
+
+/* Page enter animation */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-enter {
+  animation: fadeInUp 0.3s ease-out;
+}
