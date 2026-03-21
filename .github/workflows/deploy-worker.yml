@@ -1,0 +1,43 @@
+name: Build & Deploy RunPod Worker
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "serverless/**"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./serverless
+          push: true
+          tags: ghcr.io/ziiadd33/quran-worker:latest
+
+      - name: Update RunPod endpoint image
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          curl -s -X PATCH \
+            "https://api.runpod.io/v2/c5d9iiblsnb5o5/endpoint" \
+            -H "Authorization: Bearer $RUNPOD_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"imageName": "ghcr.io/ziiadd33/quran-worker:latest"}' \
+            | echo "RunPod update response: $(cat)"
