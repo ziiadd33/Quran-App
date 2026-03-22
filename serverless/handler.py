@@ -4,8 +4,6 @@ import io
 import base64
 import numpy as np
 from transformers import (
-    WhisperProcessor,
-    WhisperForConditionalGeneration,
     Wav2Vec2ForCTC,
     Wav2Vec2Processor,
 )
@@ -14,12 +12,6 @@ import whisperx
 
 # ── Device ────────────────────────────────────────────────────────────
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# ── Load Whisper model once at cold start ─────────────────────────────
-WHISPER_MODEL_ID = "tarteel-ai/whisper-base-ar-quran"
-whisper_processor = WhisperProcessor.from_pretrained(WHISPER_MODEL_ID)
-whisper_model = WhisperForConditionalGeneration.from_pretrained(WHISPER_MODEL_ID)
-whisper_model.to(device)
 
 # ── Load Wav2Vec2 CTC model once at cold start ───────────────────────
 WAV2VEC2_MODEL_ID = "rabah2026/wav2vec2-large-xlsr-53-arabic-quran-v_final"
@@ -204,40 +196,6 @@ def transcribe_ctc_handler(audio_array):
     return {"segments": segments}
 
 
-def transcribe_handler(audio_array):
-    """Original Whisper transcription mode."""
-    input_features = whisper_processor(
-        audio_array, sampling_rate=16000, return_tensors="pt"
-    ).input_features.to(device)
-
-    predicted_ids = whisper_model.generate(
-        input_features,
-        return_timestamps=True,
-        language="ar",
-        task="transcribe",
-    )
-
-    result = whisper_processor.batch_decode(
-        predicted_ids, skip_special_tokens=True, output_offsets=True
-    )
-
-    segments = []
-    if result and len(result) > 0:
-        for chunk in result[0].get("offsets", []):
-            segments.append({
-                "start": chunk["timestamp"][0],
-                "end": chunk["timestamp"][1],
-                "text": chunk["text"],
-            })
-
-    if not segments and result:
-        text = result[0] if isinstance(result[0], str) else result[0].get("text", "")
-        if text:
-            duration = len(audio_array) / 16000
-            segments.append({"start": 0.0, "end": duration, "text": text})
-
-    return {"segments": segments}
-
 
 def align_handler(audio_array, text, language="ar"):
     """
@@ -300,10 +258,8 @@ def handler(event):
         text = inp["text"]
         language = inp.get("language", "ar")
         return align_handler(audio_array, text, language)
-    elif mode == "transcribe_ctc":
-        return transcribe_ctc_handler(audio_array)
     else:
-        return transcribe_handler(audio_array)
+        return transcribe_ctc_handler(audio_array)
 
 
 runpod.serverless.start({"handler": handler})
