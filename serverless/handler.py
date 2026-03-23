@@ -25,138 +25,84 @@ align_model, align_metadata = whisperx.load_align_model(
 )
 
 
-# ── Silence-based segmentation for CTC output ────────────────────────
+# ── CTC-based segmentation using real character timestamps ────────────
 
-def segment_by_silence(audio_array, text, sr=16000,
-                       min_silence_len=0.3, silence_thresh_db=-40,
-                       max_segment_duration=30.0):
+def build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration,
+                              min_pause=0.3, max_seg_duration=15.0):
     """
-    Split CTC transcription into segments using silence detection.
+    Build segments using REAL timestamps from CTC character offsets.
 
-    CTC models output continuous text without timestamps. We detect silent
-    regions in the audio and use them as natural segment boundaries, then
-    distribute the transcribed words proportionally across segments.
+    Wav2Vec2 CTC logits have one frame per ~20ms of audio. Each character
+    in the decoded output maps to a logit frame, giving us actual timestamps
+    instead of silence-based proportional estimates.
 
     Args:
-        audio_array: numpy array of audio samples at sr
-        text: full transcription text from CTC model
-        sr: sample rate
-        min_silence_len: minimum silence duration (seconds) to split on
-        silence_thresh_db: dB threshold below which audio is "silent"
-        max_segment_duration: force-split segments longer than this
+        char_offsets: list of {"char": str, "start_offset": int (CTC frame index)}
+        seconds_per_frame: audio_duration / n_logit_frames
+        audio_duration: total duration of the audio in seconds
+        min_pause: minimum gap (seconds) between words to start a new segment
+        max_seg_duration: force a new segment if current exceeds this duration
 
     Returns:
-        list of { "start": float, "end": float, "text": str }
+        list of {"start": float, "end": float, "text": str}
     """
-    if not text or not text.strip():
+    if not char_offsets:
         return []
 
-    # Compute RMS energy in short frames
-    frame_length = int(0.025 * sr)  # 25ms frames
-    hop_length = int(0.010 * sr)    # 10ms hop
+    # Group characters into words using spaces as delimiters
+    words = []
+    current_chars = []
 
-    # Calculate RMS energy per frame
-    rms = librosa.feature.rms(y=audio_array, frame_length=frame_length,
-                               hop_length=hop_length)[0]
+    for item in char_offsets:
+        char = item["char"]
+        start_time = item["start_offset"] * seconds_per_frame
 
-    # Convert to dB
-    rms_db = librosa.amplitude_to_db(rms, ref=np.max(rms) if np.max(rms) > 0 else 1.0)
-
-    # Find silent frames
-    is_silent = rms_db < silence_thresh_db
-    frame_times = librosa.frames_to_time(np.arange(len(rms_db)),
-                                          sr=sr, hop_length=hop_length)
-
-    # Find silence regions (contiguous silent frames)
-    silence_regions = []
-    in_silence = False
-    silence_start = 0.0
-
-    for i, silent in enumerate(is_silent):
-        t = frame_times[i]
-        if silent and not in_silence:
-            in_silence = True
-            silence_start = t
-        elif not silent and in_silence:
-            in_silence = False
-            duration = t - silence_start
-            if duration >= min_silence_len:
-                silence_regions.append((silence_start, t))
-
-    # End of audio
-    if in_silence:
-        duration = frame_times[-1] - silence_start
-        if duration >= min_silence_len:
-            silence_regions.append((silence_start, frame_times[-1]))
-
-    # Build speech segments from gaps between silences
-    audio_duration = len(audio_array) / sr
-    speech_boundaries = []
-
-    # Find speech regions (inverse of silence regions)
-    prev_end = 0.0
-    for sil_start, sil_end in silence_regions:
-        if sil_start > prev_end + 0.1:  # at least 100ms of speech
-            speech_boundaries.append((prev_end, sil_start))
-        prev_end = sil_end
-
-    # Last segment
-    if prev_end < audio_duration - 0.1:
-        speech_boundaries.append((prev_end, audio_duration))
-
-    # If no silence detected, treat entire audio as one segment
-    if not speech_boundaries:
-        speech_boundaries = [(0.0, audio_duration)]
-
-    # Merge short segments and split long ones
-    merged = []
-    for start, end in speech_boundaries:
-        if merged and (start - merged[-1][1]) < min_silence_len:
-            # Merge with previous if gap is too short
-            merged[-1] = (merged[-1][0], end)
+        if char == " ":
+            if current_chars:
+                words.append({
+                    "text": "".join(c["char"] for c in current_chars),
+                    "start": current_chars[0]["time"],
+                    "end": start_time,
+                })
+                current_chars = []
         else:
-            merged.append((start, end))
+            current_chars.append({"char": char, "time": start_time})
 
-    # Force-split segments that are too long
-    final_boundaries = []
-    for start, end in merged:
-        duration = end - start
-        if duration <= max_segment_duration:
-            final_boundaries.append((start, end))
-        else:
-            # Split into roughly equal parts
-            n_parts = int(np.ceil(duration / max_segment_duration))
-            part_dur = duration / n_parts
-            for p in range(n_parts):
-                ps = start + p * part_dur
-                pe = start + (p + 1) * part_dur
-                final_boundaries.append((ps, min(pe, end)))
+    # Last word (no trailing space)
+    if current_chars:
+        words.append({
+            "text": "".join(c["char"] for c in current_chars),
+            "start": current_chars[0]["time"],
+            "end": audio_duration,
+        })
 
-    # Distribute words proportionally across segments based on duration
-    words = text.split()
-    total_speech_duration = sum(end - start for start, end in final_boundaries)
+    if not words:
+        return []
 
+    # Group words into segments: split on pause >= min_pause OR segment >= max_seg_duration
     segments = []
-    word_idx = 0
-    for start, end in final_boundaries:
-        seg_duration = end - start
-        # Proportion of words for this segment
-        word_share = seg_duration / total_speech_duration if total_speech_duration > 0 else 1.0
-        n_words = max(1, round(word_share * len(words)))
+    current_seg = [words[0]]
 
-        seg_words = words[word_idx:word_idx + n_words]
-        word_idx += n_words
+    for word in words[1:]:
+        gap = word["start"] - current_seg[-1]["end"]
+        seg_duration = word["end"] - current_seg[0]["start"]
 
-        if seg_words:
+        if gap >= min_pause or seg_duration >= max_seg_duration:
             segments.append({
-                "start": round(start, 2),
-                "end": round(end, 2),
-                "text": " ".join(seg_words),
+                "start": round(current_seg[0]["start"], 2),
+                "end": round(current_seg[-1]["end"], 2),
+                "text": " ".join(w["text"] for w in current_seg),
             })
+            current_seg = [word]
+        else:
+            current_seg.append(word)
 
-    # Assign remaining words to last segment
-    if word_idx < len(words) and segments:
-        segments[-1]["text"] += " " + " ".join(words[word_idx:])
+    if current_seg:
+        segments.append({
+            "start": round(current_seg[0]["start"], 2),
+            "end": round(current_seg[-1]["end"], 2),
+            "text": " ".join(w["text"] for w in current_seg),
+        })
 
     return segments
 
@@ -166,32 +112,38 @@ def transcribe_ctc_handler(audio_array):
     Transcription using Wav2Vec2 CTC model (no hallucinations).
 
     Returns segments in the same format as Whisper for compatibility
-    with the downstream matcher pipeline.
+    with the downstream matcher pipeline. Timestamps come from real
+    CTC character offsets, not silence detection.
     """
-    # Process audio with Wav2Vec2
     inputs = wav2vec2_processor(
         audio_array, sampling_rate=16000, return_tensors="pt", padding=True
     )
 
     with torch.no_grad():
-        logits = wav2vec2_model(
-            inputs.input_values.to(device)
-        ).logits
+        logits = wav2vec2_model(inputs.input_values.to(device)).logits
 
-    # Decode CTC output
     predicted_ids = torch.argmax(logits, dim=-1)
-    transcription = wav2vec2_processor.batch_decode(
-        predicted_ids, skip_special_tokens=True
-    )[0]
 
-    # Segment by silence detection
-    segments = segment_by_silence(audio_array, transcription)
+    # Decode with real character-level timestamps from CTC
+    outputs = wav2vec2_processor.batch_decode(
+        predicted_ids.cpu(),
+        output_char_offsets=True,
+        skip_special_tokens=True,
+    )
 
-    # If segmentation failed, return as single segment
+    char_offsets = outputs.char_offsets[0]  # [{"char": str, "start_offset": int}, ...]
+
+    # seconds per CTC frame = audio_duration / n_logit_frames
+    audio_duration = len(audio_array) / 16000
+    seconds_per_frame = audio_duration / logits.shape[1]
+
+    segments = build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration)
+
+    # Fallback: if no segments (rare), return full audio as one segment
     if not segments:
-        duration = len(audio_array) / 16000
+        transcription = outputs.text[0] if outputs.text else ""
         if transcription.strip():
-            segments = [{"start": 0.0, "end": round(duration, 2), "text": transcription}]
+            segments = [{"start": 0.0, "end": round(audio_duration, 2), "text": transcription}]
 
     return {"segments": segments}
 
