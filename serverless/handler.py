@@ -1,3 +1,4 @@
+# Quran Worker — Wav2Vec2 CTC transcription + WhisperX alignment
 import runpod
 import torch
 import io
