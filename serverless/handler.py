@@ -69,12 +69,14 @@ def build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration,
         else:
             current_chars.append({"char": char, "time": start_time})
 
-    # Last word (no trailing space)
+    # Last word (no trailing space) — estimate end from char count
     if current_chars:
+        estimated_duration = max(0.5, len(current_chars) * 0.08)
+        word_end = min(current_chars[0]["time"] + estimated_duration, audio_duration)
         words.append({
             "text": "".join(c["char"] for c in current_chars),
             "start": current_chars[0]["time"],
-            "end": audio_duration,
+            "end": word_end,
         })
 
     if not words:
@@ -108,45 +110,80 @@ def build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration,
     return segments
 
 
+def split_audio(audio_array, sr=16000, chunk_duration=30.0, overlap=0.5):
+    """Split audio into overlapping chunks of chunk_duration seconds."""
+    chunk_samples = int(chunk_duration * sr)
+    overlap_samples = int(overlap * sr)
+    step = chunk_samples - overlap_samples
+    chunks = []
+    start = 0
+    while start < len(audio_array):
+        end = min(start + chunk_samples, len(audio_array))
+        chunks.append((start / sr, audio_array[start:end]))
+        if end == len(audio_array):
+            break
+        start += step
+    return chunks  # list of (start_time_seconds, audio_slice)
+
+
 def transcribe_ctc_handler(audio_array):
     """
     Transcription using Wav2Vec2 CTC model (no hallucinations).
 
-    Returns segments in the same format as Whisper for compatibility
-    with the downstream matcher pipeline. Timestamps come from real
-    CTC character offsets, not silence detection.
+    Splits audio into 30s sub-chunks to keep the CTC model within its
+    effective range (~15-20s of meaningful output per chunk). Each sub-chunk
+    is transcribed independently and timestamps are offset to absolute position.
     """
-    inputs = wav2vec2_processor(
-        audio_array, sampling_rate=16000, return_tensors="pt", padding=True
-    )
-
-    with torch.no_grad():
-        logits = wav2vec2_model(inputs.input_values.to(device)).logits
-
-    predicted_ids = torch.argmax(logits, dim=-1)
-
-    # Decode with real character-level timestamps from CTC
-    outputs = wav2vec2_processor.batch_decode(
-        predicted_ids.cpu(),
-        output_char_offsets=True,
-        skip_special_tokens=True,
-    )
-
-    char_offsets = outputs.char_offsets[0]  # [{"char": str, "start_offset": int}, ...]
-
-    # seconds per CTC frame = audio_duration / n_logit_frames
     audio_duration = len(audio_array) / 16000
-    seconds_per_frame = audio_duration / logits.shape[1]
+    all_segments = []
 
-    segments = build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration)
+    # Split into 30s sub-chunks to keep CTC model within its effective range
+    sub_chunks = split_audio(audio_array, sr=16000, chunk_duration=30.0, overlap=0.5)
 
-    # Fallback: if no segments (rare), return full audio as one segment
-    if not segments:
-        transcription = outputs.text[0] if outputs.text else ""
-        if transcription.strip():
-            segments = [{"start": 0.0, "end": round(audio_duration, 2), "text": transcription}]
+    for chunk_start_time, chunk_audio in sub_chunks:
+        inputs = wav2vec2_processor(
+            chunk_audio, sampling_rate=16000, return_tensors="pt", padding=True
+        )
+        with torch.no_grad():
+            logits = wav2vec2_model(inputs.input_values.to(device)).logits
 
-    return {"segments": segments}
+        predicted_ids = torch.argmax(logits, dim=-1)
+
+        outputs = wav2vec2_processor.batch_decode(
+            predicted_ids.cpu(),
+            output_char_offsets=True,
+            skip_special_tokens=True,
+        )
+
+        char_offsets = outputs.char_offsets[0]
+        chunk_duration = len(chunk_audio) / 16000
+        seconds_per_frame = chunk_duration / logits.shape[1]
+
+        segments = build_segments_from_ctc(char_offsets, seconds_per_frame, chunk_duration)
+
+        # Offset timestamps to absolute position in the full audio
+        for seg in segments:
+            seg["start"] = round(seg["start"] + chunk_start_time, 2)
+            seg["end"] = round(seg["end"] + chunk_start_time, 2)
+
+        all_segments.extend(segments)
+
+    # Merge overlapping segments from adjacent sub-chunks
+    all_segments.sort(key=lambda s: s["start"])
+    merged = []
+    for seg in all_segments:
+        if merged and seg["start"] < merged[-1]["end"] - 0.1:
+            # Overlapping: keep the one with more text
+            if len(seg["text"]) > len(merged[-1]["text"]):
+                merged[-1] = seg
+        else:
+            merged.append(seg)
+
+    # Fallback
+    if not merged:
+        merged = [{"start": 0.0, "end": round(audio_duration, 2), "text": ""}]
+
+    return {"segments": merged}
 
 
 
