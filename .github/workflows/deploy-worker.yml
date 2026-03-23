@@ -2,7 +2,7 @@ name: Build & Deploy RunPod Worker
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - "serverless/**"
 
