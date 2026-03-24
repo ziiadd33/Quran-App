@@ -1,4 +1,4 @@
-# Quran Worker v3 — Wav2Vec2 CTC transcription + WhisperX alignment
+# Quran Worker v4 — Wav2Vec2 CTC with 30s sub-chunk splitting
 import runpod
 import torch
 import io

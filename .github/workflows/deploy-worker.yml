@@ -29,7 +29,9 @@ jobs:
         with:
           context: ./serverless
           push: true
-          tags: ghcr.io/ziiadd33/quran-worker:latest
+          tags: |
+            ghcr.io/ziiadd33/quran-worker:latest
+            ghcr.io/ziiadd33/quran-worker:${{ github.sha }}
 
       - name: Update RunPod endpoint image
         env:
@@ -39,5 +41,5 @@ jobs:
             "https://api.runpod.io/v2/cy7nb8azy7wad9/endpoint" \
             -H "Authorization: Bearer $RUNPOD_API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"imageName": "ghcr.io/ziiadd33/quran-worker:latest"}' \
+            -d "{\"imageName\": \"ghcr.io/ziiadd33/quran-worker:${{ github.sha }}\"}" \
             | echo "RunPod update response: $(cat)"
