@@ -83,7 +83,16 @@ const MAX_FATIHA_DURATION = 45;
 const TYPICAL_FATIHA_DURATION = 35;
 
 /** Common Arabic words excluded from Fatiha-specific word matching (too frequent in all surahs) */
-const COMMON_ARABIC_WORDS = new Set(["الله", "لله"].map(normalize));
+const COMMON_ARABIC_WORDS = new Set([
+  "الله", "لله", "بسم",
+  "الرحمن", "الرحيم",
+  "رب", "العالمين",
+  "يوم", "الدين",
+  "الذين", "عليهم", "غير",
+  "ولا", "من", "في", "ما",
+  "ان", "كان", "على", "هو",
+  "مالك",
+].map(normalize));
 
 /** Minimum similarity to accept a surah match */
 const MIN_SIMILARITY = 0.4;
@@ -333,27 +342,21 @@ function trimSurahBlockTail(
     }
 
     // Content-based check: does this segment match any Quranic text?
-    // If not, it's non-Quranic transition content (takbirat/ruku that CTC garbled)
+    // Use n-gram existence (findCandidates) instead of wordSimilarity to avoid
+    // the denominator problem: wordSimilarity(15 words, 3000 surah words) is always ~0.
     if (words.length >= 3) {
       const candidates = quranIndex.findCandidates(norm);
-      let bestSim = 0;
-      for (const c of candidates.slice(0, 3)) {
-        const surah = quranIndex.getSurah(c.surahNumber);
-        if (surah) {
-          bestSim = Math.max(bestSim, wordSimilarity(words, surah.words));
-        }
-      }
-      if (bestSim < 0.05) {
-        // No significant Quran match — non-Quranic content
+      if (candidates.length === 0) {
+        // No n-gram matches — non-Quranic content
         console.log(
-          `[matcher] Tail segment ${segIndices[i]} (${duration.toFixed(1)}s) has no Quran match (best=${bestSim.toFixed(2)}) — trimming`
+          `[matcher] Tail segment ${segIndices[i]} (${duration.toFixed(1)}s) has no Quran n-gram matches — trimming`
         );
         lastQuranIdx = i - 1;
         continue;
       }
     }
 
-    // Substantial Quranic content — stop trimming
+    // Has Quran n-gram matches — stop trimming
     break;
   }
 
