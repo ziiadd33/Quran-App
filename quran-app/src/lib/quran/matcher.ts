@@ -274,6 +274,7 @@ function hasRukuDuaPattern(norm: string): boolean {
 function trimSurahBlockTail(
   segIndices: number[],
   segments: WhisperSegment[],
+  quranIndex: QuranIndex,
 ): number[] {
   if (segIndices.length <= 1) return segIndices;
 
@@ -301,26 +302,26 @@ function trimSurahBlockTail(
       // If there's substantial Quranic content before the ruku dua pattern,
       // trim within the segment rather than dropping it entirely
       if (lmanIdx > 3) {
-        // Use word-level timestamps if available; otherwise proportional estimate
+        let newEnd: number;
         if (seg.words && seg.words.length > lmanIdx) {
-          seg.end = seg.words[lmanIdx].start;
+          newEnd = seg.words[lmanIdx].start;
           console.log(
             `[matcher] Intra-segment ruku dua trim at word ${lmanIdx}/${words.length} ` +
-              `→ new end=${seg.end.toFixed(3)}s (word-level timestamp)`
+              `→ new end=${newEnd.toFixed(3)}s (word-level timestamp)`
           );
         } else {
           const ratio = lmanIdx / normWords.length;
-          seg.end = seg.start + (seg.end - seg.start) * ratio;
+          newEnd = seg.start + (seg.end - seg.start) * ratio;
           console.log(
             `[matcher] Intra-segment ruku dua trim at word ${lmanIdx}/${words.length} ` +
-              `→ new end=${seg.end.toFixed(1)}s (proportional)`
+              `→ new end=${newEnd.toFixed(1)}s (proportional)`
           );
         }
-        // Keep this segment (Quranic content preserved), stop trimming
+        // Clone segment to avoid corrupting shared array
+        segments[segIndices[i]] = { ...seg, end: newEnd };
         break;
       }
 
-      // Whole segment is essentially ruku dua — drop it
       lastQuranIdx = i - 1;
       continue;
     }
@@ -331,6 +332,27 @@ function trimSurahBlockTail(
       continue;
     }
 
+    // Content-based check: does this segment match any Quranic text?
+    // If not, it's non-Quranic transition content (takbirat/ruku that CTC garbled)
+    if (words.length >= 3) {
+      const candidates = quranIndex.findCandidates(norm);
+      let bestSim = 0;
+      for (const c of candidates.slice(0, 3)) {
+        const surah = quranIndex.getSurah(c.surahNumber);
+        if (surah) {
+          bestSim = Math.max(bestSim, wordSimilarity(words, surah.words));
+        }
+      }
+      if (bestSim < 0.05) {
+        // No significant Quran match — non-Quranic content
+        console.log(
+          `[matcher] Tail segment ${segIndices[i]} (${duration.toFixed(1)}s) has no Quran match (best=${bestSim.toFixed(2)}) — trimming`
+        );
+        lastQuranIdx = i - 1;
+        continue;
+      }
+    }
+
     // Substantial Quranic content — stop trimming
     break;
   }
@@ -339,6 +361,54 @@ function trimSurahBlockTail(
     const trimmed = segIndices.slice(0, lastQuranIdx + 1);
     console.log(
       `[matcher] Trimmed ${segIndices.length - trimmed.length} tail segment(s) from surah block`
+    );
+    return trimmed;
+  }
+  return segIndices;
+}
+
+/** Trim non-Quranic content from the START of a surah block */
+function trimSurahBlockHead(
+  segIndices: number[],
+  segments: WhisperSegment[],
+  quranIndex: QuranIndex,
+): number[] {
+  if (segIndices.length <= 1) return segIndices;
+
+  let firstQuranIdx = 0;
+
+  for (let i = 0; i < segIndices.length - 1; i++) {
+    const seg = segments[segIndices[i]];
+    const duration = seg.end - seg.start;
+    const words = toWords(seg.text);
+
+    // Short garbled fragments at start
+    if (duration < 2 && words.length <= 2) {
+      firstQuranIdx = i + 1;
+      continue;
+    }
+
+    // Content-based check against Quran index
+    if (words.length >= 3) {
+      const norm = normalize(seg.text);
+      const candidates = quranIndex.findCandidates(norm);
+      if (candidates.length === 0) {
+        console.log(
+          `[matcher] Head segment ${segIndices[i]} (${duration.toFixed(1)}s) has no Quran candidates — trimming`
+        );
+        firstQuranIdx = i + 1;
+        continue;
+      }
+    }
+
+    // Has Quranic content — stop trimming
+    break;
+  }
+
+  if (firstQuranIdx > 0) {
+    const trimmed = segIndices.slice(firstQuranIdx);
+    console.log(
+      `[matcher] Trimmed ${firstQuranIdx} head segment(s) from surah block`
     );
     return trimmed;
   }
@@ -531,8 +601,8 @@ function trimTakbiratFromBlockEdges(
         const totalLen = lastNorm.length;
         const ratio = prefixLen / totalLen;
         const newEnd = lastSeg.start + (lastSeg.end - lastSeg.start) * ratio;
-        // Mutate the segment's end so downstream code uses the trimmed time
-        lastSeg.end = newEnd;
+        // Clone segment to avoid corrupting shared array
+        segments[lastIdx] = { ...lastSeg, end: newEnd };
         console.log(
           `[matcher] Trimmed takbirat from END of segment ${lastIdx}: ` +
             `"${phrase}" → new end=${newEnd.toFixed(1)}s`
@@ -554,7 +624,8 @@ function trimTakbiratFromBlockEdges(
         const ratio = phrase.length / totalLen;
         const newStart =
           firstSeg.start + (firstSeg.end - firstSeg.start) * ratio;
-        firstSeg.start = newStart;
+        // Clone segment to avoid corrupting shared array
+        segments[firstIdx] = { ...firstSeg, start: newStart };
         console.log(
           `[matcher] Trimmed takbirat from START of segment ${firstIdx}: ` +
             `"${phrase}" → new start=${newStart.toFixed(1)}s`
@@ -580,7 +651,6 @@ function splitBlocksOnFatihaContent(
 ): RawBlock[] {
   const MIN_BLOCK_DURATION = 120; // Only split blocks > 2 minutes
   const MIN_FATIHA_GAP = 30; // Fatiha zones must be ≥30s apart (minimum: Fatiha ~20s + shortest surah ~10s)
-  const FATIHA_THRESHOLD = 0.12; // Per-segment word similarity threshold
 
   const result: RawBlock[] = [];
 
@@ -605,7 +675,13 @@ function splitBlocksOnFatihaContent(
       continue;
     }
 
-    // Find Fatiha split points via per-segment word similarity
+    // Build set of Fatiha-specific words (excluding common Arabic words like الله)
+    const fatihaWordSet = new Set(
+      fatiha.words.filter((w) => !COMMON_ARABIC_WORDS.has(w))
+    );
+
+    // Find Fatiha split points via per-segment Fatiha word count
+    // A segment with ≥2 Fatiha-specific words is a "Fatiha signal"
     const splitPoints: number[] = []; // local indices into block.segmentIndices
     let lastFatihaTime = -Infinity;
 
@@ -614,8 +690,9 @@ function splitBlocksOnFatihaContent(
       const segWords = toWords(seg.text);
       if (segWords.length < 3) continue;
 
-      const sim = wordSimilarity(segWords, fatiha.words);
-      if (sim >= FATIHA_THRESHOLD && seg.start - lastFatihaTime > MIN_FATIHA_GAP) {
+      // Count Fatiha-specific words in this segment (universal — no denominator problem)
+      const fatihaHits = segWords.filter((w) => fatihaWordSet.has(w)).length;
+      if (fatihaHits >= 2 && seg.start - lastFatihaTime > MIN_FATIHA_GAP) {
         splitPoints.push(i);
         lastFatihaTime = seg.start;
       }
@@ -766,10 +843,9 @@ function detectFatiha(
   const highSimilarity = fatihaSim > 0.5 && duration < 90;
 
   // Long block Fatiha: for blocks > 45s, require strong evidence (will be split downstream)
-  // Cap at 300s — blocks longer than 5 minutes can't be just Fatiha + one surah
+  // No duration cap — if splitBlocksOnFatihaContent failed to split, we still need to detect
   const longBlockFatiha =
     duration > MAX_FATIHA_DURATION &&
-    duration < 300 &&
     hasStartMarker &&
     (hasRahmaanMarker || markerCount >= 2);
 
@@ -777,8 +853,7 @@ function detectFatiha(
   // If any of the first segments have high word similarity to Fatiha, treat as Fatiha
   const segmentFuzzyFatiha =
     segmentFatihaScores !== undefined &&
-    segmentFatihaScores.some((s) => s >= 0.12) &&
-    duration < 300;
+    segmentFatihaScores.some((s) => s >= 0.12);
 
   const isFatiha = structuralMatch || fuzzyMatch || markerMatch || highSimilarity || longBlockFatiha || segmentFuzzyFatiha;
 
@@ -952,8 +1027,13 @@ function splitFatihaFromSurah(
   let surahSegIndices: number[];
   if (fatihaEndTime !== null) {
     surahSegIndices = segIndices.slice(splitSegIdx); // Include split segment
-    // Adjust the split segment's start for the surah portion
-    segments[segIndices[splitSegIdx]].start = fatihaEndTime;
+    // Clone the split segment to avoid corrupting shared array
+    const orig = segments[segIndices[splitSegIdx]];
+    segments[segIndices[splitSegIdx]] = {
+      ...orig,
+      start: fatihaEndTime,
+      words: orig.words?.filter((w) => w.start >= fatihaEndTime),
+    };
   } else {
     surahSegIndices = segIndices.slice(splitSegIdx + 1);
   }
@@ -1210,10 +1290,13 @@ export async function analyzeBlocks(
       const classified = classifyRecitationBlock(block, segments, quranIndex);
       for (const b of classified) {
         if (b.type === "surah") {
-          // Trim non-Quranic tail (takbirat, garbled fragments, ruku dua)
-          const trimmed = trimSurahBlockTail(b.segments, segments);
+          // Trim non-Quranic tail (takbirat, garbled fragments, ruku dua, no-match content)
+          let trimmed = trimSurahBlockTail(b.segments, segments, quranIndex);
+          // Trim non-Quranic head (leaked Fatiha tail, garbled transitions)
+          trimmed = trimSurahBlockHead(trimmed, segments, quranIndex);
           if (trimmed.length > 0) {
             b.segments = trimmed;
+            b.start = segments[trimmed[0]].start;
             b.end = segments[trimmed[trimmed.length - 1]].end;
           }
         }
