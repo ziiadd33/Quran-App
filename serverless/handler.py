@@ -45,7 +45,7 @@ def build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration,
         max_seg_duration: force a new segment if current exceeds this duration
 
     Returns:
-        list of {"start": float, "end": float, "text": str}
+        list of {"start": float, "end": float, "text": str, "words": list}
     """
     if not char_offsets:
         return []
@@ -95,6 +95,10 @@ def build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration,
                 "start": round(current_seg[0]["start"], 2),
                 "end": round(current_seg[-1]["end"], 2),
                 "text": " ".join(w["text"] for w in current_seg),
+                "words": [
+                    {"word": w["text"], "start": round(w["start"], 3), "end": round(w["end"], 3)}
+                    for w in current_seg
+                ],
             })
             current_seg = [word]
         else:
@@ -105,24 +109,78 @@ def build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration,
             "start": round(current_seg[0]["start"], 2),
             "end": round(current_seg[-1]["end"], 2),
             "text": " ".join(w["text"] for w in current_seg),
+            "words": [
+                {"word": w["text"], "start": round(w["start"], 3), "end": round(w["end"], 3)}
+                for w in current_seg
+            ],
         })
 
     return segments
 
 
-def split_audio(audio_array, sr=16000, chunk_duration=30.0, overlap=0.5):
-    """Split audio into overlapping chunks of chunk_duration seconds."""
-    chunk_samples = int(chunk_duration * sr)
-    overlap_samples = int(overlap * sr)
-    step = chunk_samples - overlap_samples
+def split_audio_on_silence(audio_array, sr=16000, target_duration=20.0, top_db=30):
+    """
+    Split audio at silence gaps, targeting ~target_duration seconds per chunk.
+
+    Uses librosa.effects.split() to find non-silent intervals, then groups them
+    into chunks using silence midpoints as natural cut boundaries. This avoids
+    cutting mid-word (unlike fixed-time chunking).
+
+    Args:
+        audio_array: numpy array of audio samples
+        sr: sample rate
+        target_duration: target chunk length in seconds (~20s)
+        top_db: silence threshold in dB below peak (higher = more aggressive)
+
+    Returns:
+        list of (start_time_seconds, audio_slice) tuples
+    """
+    intervals = librosa.effects.split(audio_array, top_db=top_db,
+                                       frame_length=2048, hop_length=512)
+    if len(intervals) == 0:
+        return [(0.0, audio_array)]
+
+    # Build potential cut points at midpoint of each silence gap
+    cut_samples = [0]
+    for i in range(1, len(intervals)):
+        gap_start = int(intervals[i - 1][1])
+        gap_end = int(intervals[i][0])
+        if gap_end > gap_start:
+            cut_samples.append((gap_start + gap_end) // 2)
+    cut_samples.append(len(audio_array))
+
+    # Greedily group cut points into chunks of ~target_duration
+    target_samples = int(target_duration * sr)
+    max_samples = int(target_duration * 2 * sr)  # absolute max: 2x target
     chunks = []
-    start = 0
-    while start < len(audio_array):
-        end = min(start + chunk_samples, len(audio_array))
-        chunks.append((start / sr, audio_array[start:end]))
-        if end == len(audio_array):
-            break
-        start += step
+    chunk_start_idx = 0
+
+    for i in range(1, len(cut_samples)):
+        chunk_len = cut_samples[i] - cut_samples[chunk_start_idx]
+        if chunk_len >= target_samples and i > chunk_start_idx + 1:
+            # Use previous cut point as boundary (i-1 is the last good silence)
+            boundary = cut_samples[i - 1]
+            chunks.append((
+                cut_samples[chunk_start_idx] / sr,
+                audio_array[cut_samples[chunk_start_idx]:boundary]
+            ))
+            chunk_start_idx = i - 1
+        elif chunk_len >= max_samples:
+            # Force split at this cut point even if not ideal
+            boundary = cut_samples[i]
+            chunks.append((
+                cut_samples[chunk_start_idx] / sr,
+                audio_array[cut_samples[chunk_start_idx]:boundary]
+            ))
+            chunk_start_idx = i
+
+    # Last chunk
+    if cut_samples[chunk_start_idx] < len(audio_array):
+        chunks.append((
+            cut_samples[chunk_start_idx] / sr,
+            audio_array[cut_samples[chunk_start_idx]:]
+        ))
+
     return chunks  # list of (start_time_seconds, audio_slice)
 
 
@@ -130,17 +188,21 @@ def transcribe_ctc_handler(audio_array):
     """
     Transcription using Wav2Vec2 CTC model (no hallucinations).
 
-    Splits audio into 30s sub-chunks to keep the CTC model within its
-    effective range (~15-20s of meaningful output per chunk). Each sub-chunk
-    is transcribed independently and timestamps are offset to absolute position.
+    Splits audio at silence boundaries (~20s target) to keep the CTC model
+    within its effective range. Each sub-chunk is transcribed independently
+    and timestamps are offset to absolute position. No overlap needed since
+    cuts happen at silence gaps (not mid-word).
     """
     audio_duration = len(audio_array) / 16000
     all_segments = []
 
-    # Split into 30s sub-chunks to keep CTC model within its effective range
-    sub_chunks = split_audio(audio_array, sr=16000, chunk_duration=30.0, overlap=0.5)
+    # Split at silence gaps, targeting ~20s chunks
+    sub_chunks = split_audio_on_silence(audio_array, sr=16000, target_duration=20.0)
 
     for chunk_start_time, chunk_audio in sub_chunks:
+        if len(chunk_audio) < 1600:  # skip tiny chunks < 0.1s
+            continue
+
         inputs = wav2vec2_processor(
             chunk_audio, sampling_rate=16000, return_tensors="pt", padding=True
         )
@@ -165,25 +227,21 @@ def transcribe_ctc_handler(audio_array):
         for seg in segments:
             seg["start"] = round(seg["start"] + chunk_start_time, 2)
             seg["end"] = round(seg["end"] + chunk_start_time, 2)
+            if seg.get("words"):
+                for w in seg["words"]:
+                    w["start"] = round(w["start"] + chunk_start_time, 3)
+                    w["end"] = round(w["end"] + chunk_start_time, 3)
 
         all_segments.extend(segments)
 
-    # Merge overlapping segments from adjacent sub-chunks
+    # Sort by start time (chunks are already non-overlapping)
     all_segments.sort(key=lambda s: s["start"])
-    merged = []
-    for seg in all_segments:
-        if merged and seg["start"] < merged[-1]["end"] - 0.1:
-            # Overlapping: keep the one with more text
-            if len(seg["text"]) > len(merged[-1]["text"]):
-                merged[-1] = seg
-        else:
-            merged.append(seg)
 
     # Fallback
-    if not merged:
-        merged = [{"start": 0.0, "end": round(audio_duration, 2), "text": ""}]
+    if not all_segments:
+        all_segments = [{"start": 0.0, "end": round(audio_duration, 2), "text": "", "words": []}]
 
-    return {"segments": merged}
+    return {"segments": all_segments}
 
 
 
