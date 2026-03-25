@@ -1,4 +1,4 @@
-# Quran Worker v4 — Wav2Vec2 CTC with 30s sub-chunk splitting
+# Quran Worker v5 — Wav2Vec2 CTC with fixed 30s chunks (no silence detection)
 import runpod
 import torch
 import io
@@ -118,86 +118,55 @@ def build_segments_from_ctc(char_offsets, seconds_per_frame, audio_duration,
     return segments
 
 
-def split_audio_on_silence(audio_array, sr=16000, target_duration=20.0, top_db=30):
+def split_fixed_chunks(audio_array, sr=16000, chunk_duration=30.0, overlap=5.0):
     """
-    Split audio at silence gaps, targeting ~target_duration seconds per chunk.
+    Split audio into fixed-duration chunks with overlap.
 
-    Uses librosa.effects.split() to find non-silent intervals, then groups them
-    into chunks using silence midpoints as natural cut boundaries. This avoids
-    cutting mid-word (unlike fixed-time chunking).
+    Previous silence-based splitting (top_db=30) classified quiet tajweed
+    recitation as silence, creating huge sub-chunks that overwhelmed the CTC
+    model. Fixed chunks ensure every piece of audio gets transcribed.
 
     Args:
         audio_array: numpy array of audio samples
         sr: sample rate
-        target_duration: target chunk length in seconds (~20s)
-        top_db: silence threshold in dB below peak (higher = more aggressive)
+        chunk_duration: duration of each chunk in seconds
+        overlap: overlap between consecutive chunks in seconds
 
     Returns:
         list of (start_time_seconds, audio_slice) tuples
     """
-    intervals = librosa.effects.split(audio_array, top_db=top_db,
-                                       frame_length=2048, hop_length=512)
-    if len(intervals) == 0:
-        return [(0.0, audio_array)]
+    total_samples = len(audio_array)
+    chunk_samples = int(chunk_duration * sr)
+    step_samples = int((chunk_duration - overlap) * sr)
 
-    # Build potential cut points at midpoint of each silence gap
-    cut_samples = [0]
-    for i in range(1, len(intervals)):
-        gap_start = int(intervals[i - 1][1])
-        gap_end = int(intervals[i][0])
-        if gap_end > gap_start:
-            cut_samples.append((gap_start + gap_end) // 2)
-    cut_samples.append(len(audio_array))
-
-    # Greedily group cut points into chunks of ~target_duration
-    target_samples = int(target_duration * sr)
-    max_samples = int(target_duration * 2 * sr)  # absolute max: 2x target
     chunks = []
-    chunk_start_idx = 0
+    pos = 0
+    while pos < total_samples:
+        end = min(pos + chunk_samples, total_samples)
+        chunk_audio = audio_array[pos:end]
+        chunk_start_time = pos / sr
+        chunks.append((chunk_start_time, chunk_audio))
+        pos += step_samples
+        if end >= total_samples:
+            break
 
-    for i in range(1, len(cut_samples)):
-        chunk_len = cut_samples[i] - cut_samples[chunk_start_idx]
-        if chunk_len >= target_samples and i > chunk_start_idx + 1:
-            # Use previous cut point as boundary (i-1 is the last good silence)
-            boundary = cut_samples[i - 1]
-            chunks.append((
-                cut_samples[chunk_start_idx] / sr,
-                audio_array[cut_samples[chunk_start_idx]:boundary]
-            ))
-            chunk_start_idx = i - 1
-        elif chunk_len >= max_samples:
-            # Force split at this cut point even if not ideal
-            boundary = cut_samples[i]
-            chunks.append((
-                cut_samples[chunk_start_idx] / sr,
-                audio_array[cut_samples[chunk_start_idx]:boundary]
-            ))
-            chunk_start_idx = i
-
-    # Last chunk
-    if cut_samples[chunk_start_idx] < len(audio_array):
-        chunks.append((
-            cut_samples[chunk_start_idx] / sr,
-            audio_array[cut_samples[chunk_start_idx]:]
-        ))
-
-    return chunks  # list of (start_time_seconds, audio_slice)
+    return chunks
 
 
 def transcribe_ctc_handler(audio_array):
     """
     Transcription using Wav2Vec2 CTC model (no hallucinations).
 
-    Splits audio at silence boundaries (~20s target) to keep the CTC model
-    within its effective range. Each sub-chunk is transcribed independently
-    and timestamps are offset to absolute position. No overlap needed since
-    cuts happen at silence gaps (not mid-word).
+    Splits audio into fixed 30s chunks with 5s overlap. Previous silence-based
+    splitting only captured ~14% of the audio because quiet tajweed recitation
+    was classified as silence (top_db=30 vs loud takbirat peaks).
     """
     audio_duration = len(audio_array) / 16000
     all_segments = []
 
-    # Split at silence gaps, targeting ~20s chunks
-    sub_chunks = split_audio_on_silence(audio_array, sr=16000, target_duration=20.0)
+    # Fixed 30s chunks with 5s overlap — ensures ALL audio reaches the CTC model
+    sub_chunks = split_fixed_chunks(audio_array, sr=16000,
+                                      chunk_duration=30.0, overlap=5.0)
 
     for chunk_start_time, chunk_audio in sub_chunks:
         if len(chunk_audio) < 1600:  # skip tiny chunks < 0.1s
@@ -234,14 +203,22 @@ def transcribe_ctc_handler(audio_array):
 
         all_segments.extend(segments)
 
-    # Sort by start time (chunks are already non-overlapping)
+    # Sort and deduplicate segments from overlap zones
     all_segments.sort(key=lambda s: s["start"])
+    deduped = []
+    for seg in all_segments:
+        if deduped and abs(seg["start"] - deduped[-1]["start"]) < 0.5:
+            # Duplicate from overlap zone — keep the longer (more complete) one
+            if (seg["end"] - seg["start"]) > (deduped[-1]["end"] - deduped[-1]["start"]):
+                deduped[-1] = seg
+        else:
+            deduped.append(seg)
 
     # Fallback
-    if not all_segments:
-        all_segments = [{"start": 0.0, "end": round(audio_duration, 2), "text": "", "words": []}]
+    if not deduped:
+        deduped = [{"start": 0.0, "end": round(audio_duration, 2), "text": "", "words": []}]
 
-    return {"segments": all_segments}
+    return {"segments": deduped}
 
 
 
