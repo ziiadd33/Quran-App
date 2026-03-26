@@ -1,4 +1,5 @@
 # Quran Worker v5 — Wav2Vec2 CTC with fixed 30s chunks (no silence detection)
+# Trigger redeploy
 import runpod
 import torch
 import io
