@@ -41,5 +41,5 @@ jobs:
             "https://api.runpod.io/v2/utbajkwq1pr4u7/endpoint" \
             -H "Authorization: Bearer $RUNPOD_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"imageName\": \"ghcr.io/ziiadd33/quran-worker:${{ github.sha }}\"}" \
+            -d "{\"imageName\": \"ghcr.io/ziiadd33/quran-worker:latest\"}" \
             | echo "RunPod update response: $(cat)"
