@@ -13,9 +13,6 @@ RUN pip uninstall -y torch torchvision torchaudio
 RUN pip install --no-cache-dir \
     torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# numpy<2 required — whisperx/librosa have incompatibilities with numpy 2.x
-RUN pip install --no-cache-dir "numpy<2"
-
 # ctranslate2 must be installed before whisperx (build dependency)
 RUN pip install --no-cache-dir ctranslate2
 
@@ -28,6 +25,10 @@ RUN pip install --no-cache-dir \
     transformers \
     librosa \
     soundfile
+
+# numpy<2 MUST be installed LAST — pyannote.audio uses np.NaN which was
+# removed in numpy 2.0. Earlier pip layers may upgrade numpy past 2.0.
+RUN pip install --no-cache-dir "numpy<2"
 
 COPY handler.py .
 
