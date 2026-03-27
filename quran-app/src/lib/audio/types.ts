@@ -12,6 +12,8 @@ export interface WhisperSegment {
   end: number;
   text: string;
   words?: { word: string; start: number; end: number }[];
+  /** "aligned" = WhisperX real timestamps, "ctc_fallback" = compressed CTC timestamps */
+  alignment_quality?: "aligned" | "ctc_fallback";
 }
 
 /** A contiguous region of speech (merged from consecutive Whisper segments) */

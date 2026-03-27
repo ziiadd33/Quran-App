@@ -154,13 +154,79 @@ def split_fixed_chunks(audio_array, sr=16000, chunk_duration=30.0, overlap=5.0):
     return chunks
 
 
+def align_chunk_text(chunk_audio, ctc_text, chunk_duration):
+    """
+    Second pass: use WhisperX forced alignment to get real timestamps
+    for text that CTC already transcribed accurately.
+
+    CTC timestamps are compressed 3-8x because CTC frames don't map
+    linearly to real audio time when silence/takbirat is present.
+    WhisperX does phoneme-level audio-text alignment (not re-transcription).
+    """
+    if not ctc_text.strip():
+        return None
+    try:
+        transcript_segments = [{"text": ctc_text, "start": 0.0, "end": chunk_duration}]
+        aligned = whisperx.align(
+            transcript_segments, align_model, align_metadata,
+            chunk_audio, device, return_char_alignments=False,
+        )
+        word_segments = aligned.get("word_segments", [])
+        return word_segments if word_segments else None
+    except Exception as e:
+        print(f"[align_chunk] WhisperX alignment failed: {e}")
+        return None
+
+
+def rebuild_segments_from_alignment(ctc_segments, whisperx_words):
+    """
+    Replace CTC word timestamps with WhisperX-aligned timestamps.
+    Walks both lists in order, matching CTC words to WhisperX words 1:1.
+    Adds alignment_quality field: "aligned" or "ctc_fallback".
+    """
+    if not whisperx_words:
+        return ctc_segments
+    wx_idx = 0
+    rebuilt = []
+    for seg in ctc_segments:
+        ctc_words = seg.get("words", [])
+        new_words = []
+        seg_has_aligned = False
+        for cw in ctc_words:
+            matched = False
+            if wx_idx < len(whisperx_words):
+                wx = whisperx_words[wx_idx]
+                w_start = wx.get("start")
+                w_end = wx.get("end")
+                if w_start is not None and w_end is not None:
+                    new_words.append({"word": cw["word"], "start": round(w_start, 3), "end": round(w_end, 3)})
+                    seg_has_aligned = True
+                    matched = True
+                wx_idx += 1
+            if not matched:
+                new_words.append(cw)
+        if new_words and seg_has_aligned:
+            rebuilt.append({
+                "start": round(new_words[0].get("start", seg["start"]), 2),
+                "end": round(new_words[-1].get("end", seg["end"]), 2),
+                "text": seg["text"],
+                "words": new_words,
+                "alignment_quality": "aligned",
+            })
+        else:
+            rebuilt.append({**seg, "alignment_quality": "ctc_fallback"})
+    return rebuilt
+
+
 def transcribe_ctc_handler(audio_array):
     """
-    Transcription using Wav2Vec2 CTC model (no hallucinations).
+    Two-pass transcription: CTC for text accuracy + WhisperX for real timestamps.
 
-    Splits audio into fixed 30s chunks with 5s overlap. Previous silence-based
-    splitting only captured ~14% of the audio because quiet tajweed recitation
-    was classified as silence (top_db=30 vs loud takbirat peaks).
+    Pass 1: Wav2Vec2 CTC — accurate Arabic Quranic text (no hallucinations)
+    Pass 2: WhisperX forced alignment — real word-level timestamps
+
+    CTC timestamps are compressed 3-8x; WhisperX corrects them by aligning
+    the known text against the actual audio phonemes.
     """
     audio_duration = len(audio_array) / 16000
     all_segments = []
@@ -192,6 +258,16 @@ def transcribe_ctc_handler(audio_array):
         seconds_per_frame = chunk_duration / logits.shape[1]
 
         segments = build_segments_from_ctc(char_offsets, seconds_per_frame, chunk_duration)
+
+        # Second pass: WhisperX forced alignment for real timestamps
+        ctc_text = " ".join(seg["text"] for seg in segments)
+        whisperx_words = align_chunk_text(chunk_audio, ctc_text, chunk_duration)
+
+        if whisperx_words:
+            segments = rebuild_segments_from_alignment(segments, whisperx_words)
+        else:
+            for seg in segments:
+                seg["alignment_quality"] = "ctc_fallback"
 
         # Offset timestamps to absolute position in the full audio
         for seg in segments:

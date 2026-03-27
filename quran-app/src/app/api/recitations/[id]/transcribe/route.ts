@@ -11,6 +11,7 @@ interface RunPodTranscribeResponse {
     end: number;
     text: string;
     words?: { word: string; start: number; end: number }[];
+    alignment_quality?: "aligned" | "ctc_fallback";
   }[];
 }
 

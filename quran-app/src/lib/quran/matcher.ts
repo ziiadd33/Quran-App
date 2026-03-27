@@ -639,6 +639,52 @@ function trimTakbiratFromBlockEdges(
   }
 }
 
+// ── Step 2b.5: Split recitation blocks on large time gaps ────────────
+//
+// With real WhisperX timestamps, gaps >8s between segments indicate
+// ruku/sujud boundaries (prayer structure, not reciter speed — universal).
+// Minimum ruku/sujud is ~15s, so 8s is a conservative threshold.
+
+const GAP_SPLIT_THRESHOLD = 8; // seconds
+
+function splitBlocksOnGaps(
+  blocks: RawBlock[],
+  segments: WhisperSegment[]
+): RawBlock[] {
+  const result: RawBlock[] = [];
+  for (const block of blocks) {
+    if (block.type !== "recitation" || block.segmentIndices.length < 2) {
+      result.push(block);
+      continue;
+    }
+    const indices = block.segmentIndices;
+    let currentStart = 0;
+    for (let i = 0; i < indices.length - 1; i++) {
+      const gap =
+        segments[indices[i + 1]].start - segments[indices[i]].end;
+      if (gap > GAP_SPLIT_THRESHOLD) {
+        if (i >= currentStart) {
+          result.push({
+            type: "recitation",
+            segmentIndices: indices.slice(currentStart, i + 1),
+          });
+        }
+        currentStart = i + 1;
+        console.log(
+          `[matcher] Gap split: ${gap.toFixed(1)}s gap at ${segments[indices[i]].end.toFixed(1)}s`
+        );
+      }
+    }
+    if (currentStart < indices.length) {
+      result.push({
+        type: "recitation",
+        segmentIndices: indices.slice(currentStart),
+      });
+    }
+  }
+  return result;
+}
+
 // ── Step 2c: Split large recitation blocks at Fatiha boundaries ─────
 //
 // CTC output is sparse and error-prone: exact marker detection (ruku, salam)
@@ -1112,6 +1158,24 @@ function classifyRecitationBlock(
     }
   }
 
+  // Garbled CTC: few words + no Quran match → takbirat (content-based, no duration threshold)
+  if (words.length <= 4 && words.length > 0) {
+    const candidates = quranIndex.findCandidates(norm);
+    if (candidates.length === 0) {
+      console.log(`[matcher] Garbled block ${start.toFixed(1)}s-${end.toFixed(1)}s (${words.length} words, no Quran match) → takbirat`);
+      return [{
+        type: "takbirat",
+        start,
+        end,
+        segments: segIndices,
+        surah: null,
+        startVerse: null,
+        endVerse: null,
+        confidence: 0.7,
+      }];
+    }
+  }
+
   const fatiha = quranIndex.getSurah(1);
 
   // Compute per-segment Fatiha similarity for CTC-friendly detection
@@ -1258,17 +1322,26 @@ export async function analyzeBlocks(
   // Step 2b: Trim takbirat phrases from edges of recitation blocks
   trimTakbiratFromBlockEdges(rawBlocks, segments);
 
+  // Step 2b.5: Split recitation blocks on large time gaps (> 8s)
+  // With real WhisperX timestamps, gaps indicate ruku/sujud boundaries
+  const gapSplitBlocks = splitBlocksOnGaps(rawBlocks, segments);
+  if (gapSplitBlocks.length !== rawBlocks.length) {
+    console.log(
+      `[matcher] After gap split: ${gapSplitBlocks.length} blocks (was ${rawBlocks.length})`
+    );
+  }
+
   // Step 2c: Split large recitation blocks at Fatiha boundaries
   // CTC output often lacks structural markers (ruku/salam), so all segments
   // end up in one giant block. This splits at per-segment Fatiha detection.
   const fatihaInfo = quranIndex.getSurah(1);
-  let processedBlocks: RawBlock[] = rawBlocks;
+  let processedBlocks: RawBlock[] = gapSplitBlocks;
   if (fatihaInfo) {
-    processedBlocks = splitBlocksOnFatihaContent(rawBlocks, segments, fatihaInfo);
-    if (processedBlocks.length !== rawBlocks.length) {
+    processedBlocks = splitBlocksOnFatihaContent(gapSplitBlocks, segments, fatihaInfo);
+    if (processedBlocks.length !== gapSplitBlocks.length) {
       console.log(
         `[matcher] After Fatiha split: ${processedBlocks.length} blocks ` +
-          `(was ${rawBlocks.length})`,
+          `(was ${gapSplitBlocks.length})`,
       );
     }
   }
