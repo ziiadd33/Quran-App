@@ -19,12 +19,13 @@ RUN pip install --no-cache-dir ctranslate2
 # Pin whisperx version for reproducible builds
 RUN pip install --no-cache-dir "whisperx==3.1.1"
 
-# Remaining dependencies
+# Remaining dependencies (matplotlib required by pyannote.audio)
 RUN pip install --no-cache-dir \
     runpod \
     transformers \
     librosa \
-    soundfile
+    soundfile \
+    matplotlib
 
 # numpy<2 MUST be installed LAST — pyannote.audio uses np.NaN which was
 # removed in numpy 2.0. Earlier pip layers may upgrade numpy past 2.0.
