@@ -1,5 +1,6 @@
 # Quran Worker v5 — Wav2Vec2 CTC with fixed 30s chunks (no silence detection)
 # Trigger redeploy
+import re
 import runpod
 import torch
 import io
@@ -11,6 +12,12 @@ from transformers import (
 )
 import librosa
 import whisperx
+
+
+def strip_tashkeel(text: str) -> str:
+    """Remove Arabic diacritics (tashkeel) that WhisperX alignment model can't handle.
+    CTC outputs full diacritics but MMS alignment model expects plain Arabic."""
+    return re.sub(r'[\u064B-\u065F\u0670]', '', text)
 
 # ── Device ────────────────────────────────────────────────────────────
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -162,16 +169,32 @@ def align_chunk_text(chunk_audio, ctc_text, chunk_duration):
     CTC timestamps are compressed 3-8x because CTC frames don't map
     linearly to real audio time when silence/takbirat is present.
     WhisperX does phoneme-level audio-text alignment (not re-transcription).
+
+    IMPORTANT: CTC outputs full Arabic diacritics (tashkeel) but the
+    WhisperX MMS alignment model expects plain Arabic. We strip diacritics
+    before alignment to prevent silent failures.
     """
     if not ctc_text.strip():
         return None
     try:
-        transcript_segments = [{"text": ctc_text, "start": 0.0, "end": chunk_duration}]
+        # Strip tashkeel — CTC outputs diacritics that MMS alignment can't handle
+        clean_text = strip_tashkeel(ctc_text)
+        print(f"[align_chunk] Aligning {len(clean_text.split())} words over {chunk_duration:.1f}s")
+
+        transcript_segments = [{"text": clean_text, "start": 0.0, "end": chunk_duration}]
         aligned = whisperx.align(
             transcript_segments, align_model, align_metadata,
             chunk_audio, device, return_char_alignments=False,
         )
         word_segments = aligned.get("word_segments", [])
+
+        if word_segments:
+            # Count how many words got valid timestamps
+            valid = sum(1 for w in word_segments if w.get("start") is not None and w.get("end") is not None)
+            print(f"[align_chunk] WhisperX returned {len(word_segments)} words, {valid} with valid timestamps")
+        else:
+            print(f"[align_chunk] WhisperX returned empty word_segments")
+
         return word_segments if word_segments else None
     except Exception as e:
         print(f"[align_chunk] WhisperX alignment failed: {e}")

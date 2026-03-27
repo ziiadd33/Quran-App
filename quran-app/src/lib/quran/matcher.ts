@@ -1323,8 +1323,15 @@ export async function analyzeBlocks(
   trimTakbiratFromBlockEdges(rawBlocks, segments);
 
   // Step 2b.5: Split recitation blocks on large time gaps (> 8s)
-  // With real WhisperX timestamps, gaps indicate ruku/sujud boundaries
-  const gapSplitBlocks = splitBlocksOnGaps(rawBlocks, segments);
+  // ONLY when timestamps are WhisperX-aligned (reliable).
+  // With CTC fallback timestamps, gaps are compression artifacts (~25s between
+  // sub-chunks) that would falsely fragment continuous recitation.
+  const hasAlignedTimestamps = segments.some(
+    (s) => s.alignment_quality === "aligned"
+  );
+  const gapSplitBlocks = hasAlignedTimestamps
+    ? splitBlocksOnGaps(rawBlocks, segments)
+    : rawBlocks;
   if (gapSplitBlocks.length !== rawBlocks.length) {
     console.log(
       `[matcher] After gap split: ${gapSplitBlocks.length} blocks (was ${rawBlocks.length})`
