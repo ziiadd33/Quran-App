@@ -13,6 +13,14 @@ from transformers import (
 import librosa
 import whisperx
 
+# Fix: WhisperX alignment.py:232 accesses processor.sampling_rate but newer
+# transformers moved it to processor.feature_extractor.sampling_rate.
+# Without this patch, every alignment call throws AttributeError silently.
+if not hasattr(Wav2Vec2Processor, 'sampling_rate'):
+    Wav2Vec2Processor.sampling_rate = property(
+        lambda self: getattr(self.feature_extractor, 'sampling_rate', 16000)
+    )
+
 
 def strip_tashkeel(text: str) -> str:
     """Remove Arabic diacritics (tashkeel) that WhisperX alignment model can't handle.
