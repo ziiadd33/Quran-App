@@ -19,6 +19,11 @@ RUN pip install --no-cache-dir ctranslate2
 # Pin whisperx version for reproducible builds
 RUN pip install --no-cache-dir "whisperx==3.1.1"
 
+# Fix: whisperx 3.1.1 (yanked unofficial release) has processor.sampling_rate
+# which broke in newer transformers. See: https://github.com/m-bain/whisperX/issues/722
+RUN sed -i 's/processor\.sampling_rate/processor.feature_extractor.sampling_rate/g' \
+    $(python -c "import whisperx, os; print(os.path.join(os.path.dirname(whisperx.__file__), 'alignment.py'))")
+
 # Remaining dependencies (matplotlib required by pyannote.audio)
 RUN pip install --no-cache-dir \
     runpod \
