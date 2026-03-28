@@ -20,6 +20,9 @@ if not hasattr(Wav2Vec2Processor, 'sampling_rate'):
     Wav2Vec2Processor.sampling_rate = property(
         lambda self: getattr(self.feature_extractor, 'sampling_rate', 16000)
     )
+    print("[init] Monkey-patched Wav2Vec2Processor.sampling_rate")
+else:
+    print(f"[init] Wav2Vec2Processor already has sampling_rate — no patch needed")
 
 
 def strip_tashkeel(text: str) -> str:
@@ -205,7 +208,9 @@ def align_chunk_text(chunk_audio, ctc_text, chunk_duration):
 
         return word_segments if word_segments else None
     except Exception as e:
+        import traceback
         print(f"[align_chunk] WhisperX alignment failed: {e}")
+        traceback.print_exc()
         return None
 
 
@@ -293,6 +298,12 @@ def transcribe_ctc_handler(audio_array):
         # Second pass: WhisperX forced alignment for real timestamps
         ctc_text = " ".join(seg["text"] for seg in segments)
         whisperx_words = align_chunk_text(chunk_audio, ctc_text, chunk_duration)
+
+        if whisperx_words:
+            valid_ts = sum(1 for w in whisperx_words if w.get("start") is not None and w.get("end") is not None)
+            print(f"[transcribe] Chunk at {chunk_start_time:.0f}s: WhisperX returned {len(whisperx_words)} words, {valid_ts} with valid timestamps")
+        else:
+            print(f"[transcribe] Chunk at {chunk_start_time:.0f}s: WhisperX returned None (alignment failed)")
 
         if whisperx_words:
             segments = rebuild_segments_from_alignment(segments, whisperx_words)
