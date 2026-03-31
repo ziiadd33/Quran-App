@@ -1,15 +1,39 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { MOCK_SESSIONS } from "@/lib/mock-data";
+import type { Recitation } from "@/lib/db/types";
 
-export default function ResultPage() {
-  const session = MOCK_SESSIONS[0];
+function ResultContent() {
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id");
+
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [recitation, setRecitation] = useState<Recitation | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const duration = session.durationMinutes * 60;
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    if (!id) {
+      setIsLoading(false);
+      return;
+    }
+
+    fetch(`/api/recitations/${id}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Recitación no encontrada");
+        return res.json();
+      })
+      .then((data: Recitation) => setRecitation(data))
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : "Error al cargar"),
+      )
+      .finally(() => setIsLoading(false));
+  }, [id]);
 
   function togglePlay() {
     if (!audioRef.current) return;
@@ -27,14 +51,29 @@ export default function ResultPage() {
     }
   }
 
+  function handleLoadedMetadata() {
+    if (audioRef.current && isFinite(audioRef.current.duration)) {
+      setDuration(audioRef.current.duration);
+    }
+  }
+
   function handleSeek(e: React.MouseEvent<HTMLDivElement>) {
+    if (!duration) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const ratio = Math.max(
+      0,
+      Math.min(1, (e.clientX - rect.left) / rect.width),
+    );
     const newTime = ratio * duration;
     setCurrentTime(newTime);
     if (audioRef.current) {
       audioRef.current.currentTime = newTime;
     }
+  }
+
+  function handleEnded() {
+    setIsPlaying(false);
+    setCurrentTime(0);
   }
 
   function formatTime(seconds: number) {
@@ -43,6 +82,31 @@ export default function ResultPage() {
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   }
 
+  if (isLoading) {
+    return (
+      <div className="page-enter flex flex-col items-center gap-4 pt-12">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
+        <p className="text-sm text-[var(--color-text-secondary)]">Cargando...</p>
+      </div>
+    );
+  }
+
+  if (error || !recitation) {
+    return (
+      <div className="page-enter flex flex-col items-center gap-4 pt-12">
+        <p className="text-sm text-red-400">{error ?? "Recitación no encontrada"}</p>
+        <Link
+          href="/"
+          className="rounded-full bg-[var(--color-accent)] px-6 py-2 text-sm font-semibold text-white"
+        >
+          Volver al inicio
+        </Link>
+      </div>
+    );
+  }
+
+  const displayDuration = recitation.processed_duration ?? recitation.duration_seconds ?? 0;
+
   return (
     <div className="page-enter flex flex-col gap-6">
       <h1 className="text-2xl font-bold">Resultado</h1>
@@ -50,28 +114,38 @@ export default function ResultPage() {
       {/* Summary card */}
       <div className="glass-card-highlight p-5">
         <div className="flex flex-col items-center gap-3">
-          <span className="font-arabic text-3xl">{session.surahArabic}</span>
+          {recitation.surah_arabic && (
+            <span className="font-arabic text-3xl">{recitation.surah_arabic}</span>
+          )}
           <span className="text-sm text-[var(--color-text-secondary)]">
-            Surah {session.surahNumber} — {session.surahName}
+            {recitation.start_surah
+              ? `Surah ${recitation.start_surah} — ${recitation.surah_name ?? ""}`
+              : "Surah sin identificar"}
           </span>
 
-          {/* 2×2 info grid */}
+          {/* 2x2 info grid */}
           <div className="mt-2 grid w-full grid-cols-2 gap-3 text-center text-sm">
             <div className="flex flex-col gap-0.5">
               <span className="text-[var(--color-text-secondary)] text-xs">Noche</span>
-              <span className="font-semibold">{session.night}</span>
+              <span className="font-semibold">{recitation.night}</span>
             </div>
             <div className="flex flex-col gap-0.5">
               <span className="text-[var(--color-text-secondary)] text-xs">Ayahs</span>
-              <span className="font-semibold">{session.startAyah} → {session.endAyah}</span>
+              <span className="font-semibold">
+                {recitation.start_ayah && recitation.end_ayah
+                  ? `${recitation.start_ayah} → ${recitation.end_ayah}`
+                  : "—"}
+              </span>
             </div>
             <div className="flex flex-col gap-0.5">
               <span className="text-[var(--color-text-secondary)] text-xs">Duración</span>
-              <span className="font-semibold">{session.durationMinutes} min</span>
+              <span className="font-semibold">
+                {displayDuration > 0 ? `${Math.round(displayDuration / 60)} min` : "—"}
+              </span>
             </div>
             <div className="flex flex-col gap-0.5">
               <span className="text-[var(--color-text-secondary)] text-xs">Recitador</span>
-              <span className="font-semibold">{session.reciterName}</span>
+              <span className="font-semibold">{recitation.reciter_name}</span>
             </div>
           </div>
 
@@ -82,54 +156,80 @@ export default function ResultPage() {
       </div>
 
       {/* Audio player */}
-      <div className="glass-card p-4">
-        <audio ref={audioRef} onTimeUpdate={handleTimeUpdate} />
-        <div className="flex items-center gap-3">
-          {/* Play/pause button */}
-          <button
-            onClick={togglePlay}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)] transition-opacity hover:opacity-90"
-          >
-            {isPlaying ? (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                <rect x="6" y="4" width="4" height="16" rx="1" />
-                <rect x="14" y="4" width="4" height="16" rx="1" />
-              </svg>
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                <polygon points="6,4 20,12 6,20" />
-              </svg>
-            )}
-          </button>
-
-          {/* Progress bar + time */}
-          <div className="flex flex-1 flex-col gap-1">
-            <div
-              className="h-2 w-full cursor-pointer rounded-full bg-[var(--color-surface)]"
-              onClick={handleSeek}
+      {recitation.processed_blob_url && (
+        <div className="glass-card p-4">
+          <audio
+            ref={audioRef}
+            src={recitation.processed_blob_url}
+            onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={handleLoadedMetadata}
+            onEnded={handleEnded}
+            preload="metadata"
+          />
+          <div className="flex items-center gap-3">
+            {/* Play/pause button */}
+            <button
+              onClick={togglePlay}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)] transition-opacity hover:opacity-90"
             >
+              {isPlaying ? (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                </svg>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                  <polygon points="6,4 20,12 6,20" />
+                </svg>
+              )}
+            </button>
+
+            {/* Progress bar + time */}
+            <div className="flex flex-1 flex-col gap-1">
               <div
-                className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-100"
-                style={{ width: `${(currentTime / duration) * 100}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-[11px] text-[var(--color-text-secondary)]">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatTime(duration)}</span>
+                className="h-2 w-full cursor-pointer rounded-full bg-[var(--color-surface)]"
+                onClick={handleSeek}
+              >
+                <div
+                  className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-100"
+                  style={{
+                    width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
+                  }}
+                />
+              </div>
+              <div className="flex justify-between text-[11px] text-[var(--color-text-secondary)]">
+                <span>{formatTime(currentTime)}</span>
+                <span>{formatTime(duration || displayDuration)}</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Action buttons */}
-      <button className="flex w-full items-center justify-center gap-2 rounded-full bg-[var(--color-accent)] py-3 font-semibold text-white transition-opacity hover:opacity-90">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
-        </svg>
-        Descargar audio
-      </button>
+      {/* Download button */}
+      {recitation.processed_blob_url && (
+        <a
+          href={recitation.processed_blob_url}
+          download={`noche-${recitation.night}-${recitation.surah_name ?? "recitacion"}.mp3`}
+          className="flex w-full items-center justify-center gap-2 rounded-full bg-[var(--color-accent)] py-3 font-semibold text-white transition-opacity hover:opacity-90"
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          Descargar audio
+        </a>
+      )}
 
       <Link
         href="/"
@@ -138,5 +238,19 @@ export default function ResultPage() {
         Volver al inicio
       </Link>
     </div>
+  );
+}
+
+export default function ResultPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="page-enter flex flex-col items-center gap-4 pt-12">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
+        </div>
+      }
+    >
+      <ResultContent />
+    </Suspense>
   );
 }

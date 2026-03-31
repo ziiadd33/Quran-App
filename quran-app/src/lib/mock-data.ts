@@ -43,84 +43,15 @@ export const SURAH_NAMES: Record<number, { arabic: string; latin: string; totalA
   18: { arabic: "الكهف",    latin: "Al-Kahf",      totalAyahs: 110 },
 };
 
-// ── Mock sessions ────────────────────────────────────────────────────
-
-export const MOCK_SESSIONS: Session[] = [
-  {
-    id: "s1",
-    night: 14,
-    reciterName: "Ahmad Al-Sayed",
-    surahNumber: 18,
-    surahName: "Al-Kahf",
-    surahArabic: "الكهف",
-    startAyah: 1,
-    endAyah: 110,
-    durationMinutes: 47,
-    status: "completed",
-    createdAt: "2026-03-14T22:30:00Z",
-  },
-  {
-    id: "s2",
-    night: 13,
-    reciterName: "Ahmad Al-Sayed",
-    surahNumber: 17,
-    surahName: "Al-Isra",
-    surahArabic: "الإسراء",
-    startAyah: 1,
-    endAyah: 111,
-    durationMinutes: 43,
-    status: "completed",
-    createdAt: "2026-03-13T22:15:00Z",
-  },
-  {
-    id: "s3",
-    night: 12,
-    reciterName: "Ahmad Al-Sayed",
-    surahNumber: 16,
-    surahName: "An-Nahl",
-    surahArabic: "النحل",
-    startAyah: 1,
-    endAyah: 128,
-    durationMinutes: 51,
-    status: "completed",
-    createdAt: "2026-03-12T22:00:00Z",
-  },
-  {
-    id: "s4",
-    night: 11,
-    reciterName: "Ahmad Al-Sayed",
-    surahNumber: 15,
-    surahName: "Al-Hijr",
-    surahArabic: "الحجر",
-    startAyah: 1,
-    endAyah: 99,
-    durationMinutes: 38,
-    status: "completed",
-    createdAt: "2026-03-11T22:10:00Z",
-  },
-  {
-    id: "s5",
-    night: 10,
-    reciterName: "Ahmad Al-Sayed",
-    surahNumber: 14,
-    surahName: "Ibrahim",
-    surahArabic: "إبراهيم",
-    startAyah: 1,
-    endAyah: 52,
-    durationMinutes: 35,
-    status: "completed",
-    createdAt: "2026-03-10T22:05:00Z",
-  },
-];
-
-// ── Processing pipeline steps ────────────────────────────────────────
+// ── Processing pipeline steps (matches useAudioProcessor 8-step pipeline) ──
 
 export const PROCESSING_STEPS: ProcessingStep[] = [
-  { id: "decode",     label: "Decoding Audio",        description: "Reading and decoding the audio file" },
-  { id: "silence",    label: "Detecting Silences",     description: "Analyzing waveform for silence gaps" },
-  { id: "split",      label: "Splitting Chunks",       description: "Dividing audio into segments" },
-  { id: "transcribe", label: "Transcribing Arabic",    description: "Converting speech to text" },
-  { id: "fatiha",     label: "Detecting Al-Fatiha",    description: "Identifying repeated Fatiha" },
-  { id: "identify",   label: "Identifying Surah:Ayah", description: "Matching text to Quran" },
-  { id: "concat",     label: "Producing Clean Audio",  description: "Concatenating final segments" },
+  { id: "decode",     label: "Decodificando Audio",       description: "Leyendo y decodificando el archivo de audio" },
+  { id: "segments",   label: "Preparando Segmentos",      description: "Dividiendo audio en segmentos procesables" },
+  { id: "transcribe", label: "Transcribiendo Árabe",      description: "Enviando a modelo CTC+WhisperX via RunPod" },
+  { id: "analyze",    label: "Analizando Recitación",     description: "Detectando Fatiha, takbirat y bloques de surah" },
+  { id: "identify",   label: "Identificando Surah",       description: "Asociando transcripción con versos del Corán" },
+  { id: "align",      label: "Alineando Timestamps",      description: "Alineación forzada para límites precisos de ayah" },
+  { id: "extract",    label: "Extrayendo Recitación",     description: "Aislando audio limpio de la surah" },
+  { id: "produce",    label: "Produciendo Audio Final",   description: "Codificando y subiendo MP3 final" },
 ];

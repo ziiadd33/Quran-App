@@ -1,53 +1,45 @@
-## Workflow Orchestration
+## Estructura detallada del rezo de Tarawih (LEER ANTES DE TOCAR CUALQUIER LÓGICA DE AUDIO)
 
-### 1. Plan Mode Default
-- Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
-- If something goes sideways, STOP and re-plan immediately — don't keep pushing
-- Use plan mode for verification steps, not just building
-- Write detailed specs upfront to reduce ambiguity
+Esta app procesa grabaciones de **rezos de Tarawih** (rezo islámico nocturno de Ramadán). Es **crítico** entender la estructura exacta para saber qué audio conservar y qué eliminar.
 
-### 2. Subagent Strategy
-- Use subagents liberally to keep main context window clean
-- Offload research, exploration, and parallel analysis to subagents
-- For complex problems, throw more compute at it via subagents
-- One task per subagent for focused execution
+### Unidad básica: la Raka'ah
+Una **raka'ah** es la unidad mínima de rezo. Contiene en orden:
+1. **Takbir de apertura**: el imam dice "الله أكبر" (Allahu Akbar)
+2. **Surah Al-Fatiha**: el imam recita la Fatiha completa. La **última palabra es "ضالين" (DAAALIIIINN)**. Inmediatamente después, la congregación responde "آمين" (AAAMIIIINN).
+3. **Cuerpo de surah**: el imam empieza a recitar una sección de una surah del Quran (esto es lo que queremos guardar).
+4. **Takbir de ruku**: el imam dice "الله أكبر" y se inclina (ruku). Después dice "سمع الله لمن حمده" (Samia Llahu li man hamidah) — marcador de fin de recitación.
+5. **Ruku y sujud**: serie de postraciones. En esta parte **solo se escuchan takbirat** — "الله أكبر" repetido varias veces, con silencios entre medias. **Todo esto se elimina.**
 
-### 3. Self-Improvement Loop
-- After ANY correction from the user: update `tasks/lessons.md` with the pattern
-- Write rules for yourself that prevent the same mistake
-- Ruthlessly iterate on these lessons until mistake rate drops
-- Review lessons at session start for relevant project
+### Estructura de 2 raka'ahs (unidad de Tarawih)
+Los rezos de Tarawih se hacen **de dos en dos raka'ahs**:
 
-### 4. Verification Before Done
-- Never mark a task complete without proving it works
-- Diff behavior between main and your changes when relevant
-- Ask yourself "Would a staff engineer approve this?"
-- Run tests, check logs, demonstrate correctness
+1. **Primera raka'ah**: Takbir → Fatiha → "daaaliiin" → "Amiiiin" → Cuerpo surah → "Allahu Akbar" → Ruku/Sujud (solo takbirat)
+2. **Segunda raka'ah**: Takbir → Fatiha → "daaaliiin" → "Amiiiin" → **Continuación del mismo punto de la surah** → "Allahu Akbar" → Ruku/Sujud (solo takbirat)
+3. **Salam**: el imam dice "السلام عليكم ورحمة الله" **dos veces** → fin del bloque de 2 raka'ahs.
+4. **Nuevo bloque de 2 raka'ahs**: todo el proceso se repite desde el principio.
 
-### 5. Demand Elegance (Balanced)
-- For non-trivial changes: pause and ask "is there a more elegant way?"
-- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
-- Skip this for simple, obvious fixes — don't over-engineer
-- Challenge your own work before presenting it
+### Continuidad de la surah en Tarawih (Ramadán)
+En Tarawih de Ramadán, la surah se recita en **orden consecutivo de ayahs a lo largo de toda la noche**:
+- Raka'ah 1 termina en la ayah 156 → Raka'ah 2 empieza en la ayah 157.
+- El siguiente bloque de 2 raka'ahs empieza donde terminó el anterior.
+- Así durante toda la noche, avanzando por el Quran en orden.
 
-### 6. Autonomous Bug Fixing
-- When given a bug report: just fix it. Don't ask for hand-holding
-- Point at logs, errors, failing tests — then resolve them
-- Zero context switching required from the user
-- Go fix failing CI tests without being told how
+### Qué guardar vs qué eliminar
+| Contenido | Acción |
+|---|---|
+| Surah Al-Fatiha (completa) | **ELIMINAR** |
+| "daaaliiin" + "Amiiiin" | **ELIMINAR** (son el final de Fatiha) |
+| **Cuerpo de surah** (post-Amiin hasta justo ANTES del "Allahu Akbar" de ruku) | **GUARDAR** ← esto es el objetivo |
+| "الله أكبر" de takbir/ruku/sujud | **ELIMINAR** |
+| "سمع الله لمن حمده" (Samia Llahu) | **ELIMINAR** (marcador de fin de recitación) |
+| Silencios de ruku/sujud + takbirat intermedios | **ELIMINAR** |
+| "السلام عليكم" (Salam) x2 | **ELIMINAR** |
 
-## Task Management
-
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
-2. **Verify Plan**: Check in before starting implementation
-3. **Track Progress**: Mark items complete as you go
-4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
-
-## Core Principles
-
-- **Simplicity First**: Make every change as simple as possible. Impact minimal code.
-- **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
-- **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
-
+### Implicaciones para el algoritmo
+- El **inicio exacto** del cuerpo de surah es justo después de que la congregación dice "Amiiiin".
+- El **fin exacto** del cuerpo de surah es justo **antes del "Allahu Akbar" de ruku** — el "Allahu Akbar" NO debe escucharse en el output.
+- "سمع الله لمن حمده" (Samia Llahu) viene DESPUÉS del "Allahu Akbar" de ruku — útil para detectar el fin, pero el corte debe ir antes del "Allahu Akbar" que lo precede.
+- El resultado ideal: al concatenar raka'ah 1 + raka'ah 2, la transición suena **completamente fluida** — última ayah de raka 1 → primera ayah de raka 2, sin ningún "Allahu Akbar" de por medio.
+- Entre dos rakas del mismo bloque, **no hay pausa larga** — solo Fatiha (~20s) separa los dos cuerpos de surah.
+- Entre dos bloques de 2 raka'ahs hay una **pausa más larga** (salam + descanso breve).
+- El audio final deseado es la **concatenación de todos los cuerpos de surah** de toda la grabación, en orden, sin interrupciones de rezo.
