@@ -12,8 +12,6 @@ export interface WhisperSegment {
   end: number;
   text: string;
   words?: { word: string; start: number; end: number }[];
-  /** "aligned" = WhisperX real timestamps, "ctc_fallback" = compressed CTC timestamps */
-  alignment_quality?: "aligned" | "ctc_fallback";
 }
 
 /** A contiguous region of speech (merged from consecutive Whisper segments) */
@@ -23,14 +21,18 @@ export interface SpeechRegion {
   text: string;
 }
 
-/** Result of transcribing a full recording via Whisper */
-export interface TranscriptionResult {
-  segments: WhisperSegment[];
-  speechRegions: SpeechRegion[];
-  fullText: string;
+/** Result from Phase 1: tarteel-ai Whisper transcription */
+export interface TranscriptionV2Result {
+  /** Full transcribed text (all segments joined) */
+  text: string;
+  /** Chunk-level timestamps from Whisper (approximate — use only for validation) */
+  chunks: {
+    text: string;
+    timestamp: [number | null, number | null];
+  }[];
 }
 
-/** A word-level alignment result from the forced aligner (WhisperX) */
+/** A word-level alignment result from the forced aligner (Phase 3) */
 export interface AlignedWord {
   word: string;
   start: number;
@@ -38,7 +40,7 @@ export interface AlignedWord {
   score: number;
 }
 
-/** Alignment result for a single ayah */
+/** Alignment result for a single ayah (Phase 3) */
 export interface AlignedAyah {
   surah: number;
   ayah: number;
@@ -47,10 +49,8 @@ export interface AlignedAyah {
   words: AlignedWord[];
 }
 
-/** Full alignment result for a surah section */
+/** Full alignment result for a surah section (Phase 3) */
 export interface AlignmentResult {
-  /** Per-ayah timestamps */
   ayahs: AlignedAyah[];
-  /** All word-level alignments */
   words: AlignedWord[];
 }

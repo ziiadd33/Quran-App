@@ -43,15 +43,10 @@ export const SURAH_NAMES: Record<number, { arabic: string; latin: string; totalA
   18: { arabic: "الكهف",    latin: "Al-Kahf",      totalAyahs: 110 },
 };
 
-// ── Processing pipeline steps (matches useAudioProcessor 8-step pipeline) ──
+// ── Processing pipeline steps — Phase 1: transcription only ──
 
 export const PROCESSING_STEPS: ProcessingStep[] = [
-  { id: "decode",     label: "Decodificando Audio",       description: "Leyendo y decodificando el archivo de audio" },
-  { id: "segments",   label: "Preparando Segmentos",      description: "Dividiendo audio en segmentos procesables" },
-  { id: "transcribe", label: "Transcribiendo Árabe",      description: "Enviando a modelo CTC+WhisperX via RunPod" },
-  { id: "analyze",    label: "Analizando Recitación",     description: "Detectando Fatiha, takbirat y bloques de surah" },
-  { id: "identify",   label: "Identificando Surah",       description: "Asociando transcripción con versos del Corán" },
-  { id: "align",      label: "Alineando Timestamps",      description: "Alineación forzada para límites precisos de ayah" },
-  { id: "extract",    label: "Extrayendo Recitación",     description: "Aislando audio limpio de la surah" },
-  { id: "produce",    label: "Produciendo Audio Final",   description: "Codificando y subiendo MP3 final" },
+  { id: "decode",     label: "Decodificando Audio",    description: "Leyendo y decodificando el archivo de audio" },
+  { id: "segments",   label: "Preparando Segmentos",   description: "Dividiendo audio en segmentos de 200s" },
+  { id: "transcribe", label: "Transcribiendo Árabe",   description: "Enviando a tarteel-ai Whisper via RunPod" },
 ];

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Recitation } from "@/lib/db/types";
 
@@ -10,12 +10,29 @@ function ResultContent() {
   const id = searchParams.get("id");
 
   const audioRef = useRef<HTMLAudioElement>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
   const [recitation, setRecitation] = useState<Recitation | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const router = useRouter();
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!audioRef.current) return;
+      if (e.key === "ArrowRight") {
+        audioRef.current.currentTime = Math.min(audioRef.current.duration || 0, audioRef.current.currentTime + 5);
+      } else if (e.key === "ArrowLeft") {
+        audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 5);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (!id) {
@@ -57,23 +74,45 @@ function ResultContent() {
     }
   }
 
-  function handleSeek(e: React.MouseEvent<HTMLDivElement>) {
-    if (!duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(
-      0,
-      Math.min(1, (e.clientX - rect.left) / rect.width),
-    );
+  function seekToClientX(clientX: number) {
+    if (!duration || !progressBarRef.current) return;
+    const rect = progressBarRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const newTime = ratio * duration;
     setCurrentTime(newTime);
-    if (audioRef.current) {
-      audioRef.current.currentTime = newTime;
+    if (audioRef.current) audioRef.current.currentTime = newTime;
+  }
+
+  function handleMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+    isDragging.current = true;
+    seekToClientX(e.clientX);
+
+    function onMouseMove(ev: MouseEvent) {
+      if (isDragging.current) seekToClientX(ev.clientX);
     }
+    function onMouseUp(ev: MouseEvent) {
+      if (isDragging.current) { seekToClientX(ev.clientX); isDragging.current = false; }
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    }
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
   }
 
   function handleEnded() {
     setIsPlaying(false);
     setCurrentTime(0);
+  }
+
+  async function handleDelete() {
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`/api/recitations/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Error al eliminar");
+      router.push("/");
+    } catch {
+      setIsDeleting(false);
+    }
   }
 
   function formatTime(seconds: number) {
@@ -109,7 +148,23 @@ function ResultContent() {
 
   return (
     <div className="page-enter flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Resultado</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Resultado</h1>
+        <button
+          onClick={handleDelete}
+          disabled={isDeleting}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+        >
+          {isDeleting ? (
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          )}
+        </button>
+      </div>
 
       {/* Summary card */}
       <div className="glass-card-highlight p-5">
@@ -187,11 +242,12 @@ function ResultContent() {
             {/* Progress bar + time */}
             <div className="flex flex-1 flex-col gap-1">
               <div
-                className="h-2 w-full cursor-pointer rounded-full bg-[var(--color-surface)]"
-                onClick={handleSeek}
+                ref={progressBarRef}
+                className="h-2 w-full cursor-pointer rounded-full bg-[var(--color-surface)] select-none"
+                onMouseDown={handleMouseDown}
               >
                 <div
-                  className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-100"
+                  className="h-full rounded-full bg-[var(--color-accent)]"
                   style={{
                     width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
                   }}
@@ -203,6 +259,26 @@ function ResultContent() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Phase 1: transcription text (shown when no processed audio yet) */}
+      {!recitation.processed_blob_url && recitation.full_text && (
+        <div className="glass-card p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+              Texto transcrito
+            </span>
+            <span className="rounded-full bg-yellow-600/20 px-2 py-0.5 text-xs font-medium text-yellow-400">
+              Identificación pendiente (Fase 2)
+            </span>
+          </div>
+          <p
+            dir="rtl"
+            className="font-arabic text-base leading-relaxed text-[var(--color-text-primary)]"
+          >
+            {recitation.full_text}
+          </p>
         </div>
       )}
 
