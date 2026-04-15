@@ -32,27 +32,11 @@ def transcribe_handler(audio_array):
     """
     result = whisper_pipe(
         {"raw": audio_array, "sampling_rate": 16000},
-        return_timestamps=True,
     )
-
-    # Normalize chunks: transformers returns [start, end] or None
-    chunks = []
-    for chunk in result.get("chunks", []):
-        ts = chunk.get("timestamp")
-        if ts and len(ts) == 2:
-            chunks.append({
-                "text": chunk["text"],
-                "timestamp": [
-                    round(ts[0], 2) if ts[0] is not None else None,
-                    round(ts[1], 2) if ts[1] is not None else None,
-                ],
-            })
-        else:
-            chunks.append({"text": chunk["text"], "timestamp": [None, None]})
 
     return {
         "text": result["text"],
-        "chunks": chunks,
+        "chunks": [],
     }
 
 
