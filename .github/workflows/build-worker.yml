@@ -31,4 +31,6 @@ jobs:
         with:
           context: ./serverless
           push: true
-          tags: ghcr.io/ziiadd33/quran-worker:latest
+          tags: |
+            ghcr.io/ziiadd33/quran-worker:latest
+            ghcr.io/ziiadd33/quran-worker:${{ github.sha }}
