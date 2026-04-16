@@ -32,6 +32,8 @@ jobs:
           tags: |
             ghcr.io/ziiadd33/quran-worker:latest
             ghcr.io/ziiadd33/quran-worker:${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/ziiadd33/quran-worker:buildcache
+          cache-to: type=registry,ref=ghcr.io/ziiadd33/quran-worker:buildcache,mode=max
 
       - name: Update RunPod endpoint image
         env:
