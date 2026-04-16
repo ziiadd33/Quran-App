@@ -13,8 +13,4 @@ RUN pip install --no-cache-dir \
 
 COPY handler.py .
 
-# Pre-download tarteel-ai/whisper-base-ar-quran during build
-RUN python -c "from transformers import pipeline; \
-    pipeline('automatic-speech-recognition', model='tarteel-ai/whisper-base-ar-quran')"
-
 CMD ["python", "-u", "handler.py"]
