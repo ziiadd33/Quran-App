@@ -1,14 +1,10 @@
-FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
-# Upgrade torch to 2.6+ (transformers requires it to load .bin models, CVE-2025-32434)
-RUN pip install --no-cache-dir "torch>=2.6.0" torchaudio \
-    --index-url https://download.pytorch.org/whl/cu124
-
-# Core dependencies
+# Core dependencies (torch 2.6 already in base image)
 RUN pip install --no-cache-dir \
     runpod \
     transformers \
