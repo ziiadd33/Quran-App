@@ -4,7 +4,11 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
-# Core dependencies (torch already included in base image)
+# Upgrade torch to 2.6+ (transformers requires it to load .bin models, CVE-2025-32434)
+RUN pip install --no-cache-dir "torch>=2.6.0" torchaudio \
+    --index-url https://download.pytorch.org/whl/cu124
+
+# Core dependencies
 RUN pip install --no-cache-dir \
     runpod \
     transformers \
