@@ -45,7 +45,7 @@ jobs:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
         run: |
           curl -s -X PATCH \
-            "https://api.runpod.io/v2/utbajkwq1pr4u7/endpoint" \
+            "https://api.runpod.io/v2/5wfaey5yhjm1vi/endpoint" \
             -H "Authorization: Bearer $RUNPOD_API_KEY" \
             -H "Content-Type: application/json" \
             -d "{\"imageName\": \"ghcr.io/ziiadd33/quran-worker:latest\"}" \
